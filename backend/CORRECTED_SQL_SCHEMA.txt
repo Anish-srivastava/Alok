@@ -1,0 +1,97 @@
+=== CORRECTED SQL SCHEMA FOR SUPABASE ===
+
+The error occurred because the backend expects "password" column but the table has "password_hash".
+
+** STEP 1: Drop existing tables (if they exist) **
+
+DROP TABLE IF EXISTS attendance_records;
+DROP TABLE IF EXISTS attendance_sessions;
+DROP TABLE IF EXISTS auth_teachers;
+DROP TABLE IF EXISTS auth_users;
+DROP TABLE IF EXISTS students;
+
+** STEP 2: Create tables with correct column names **
+
+-- Students table (correct)
+CREATE TABLE students (
+    id SERIAL PRIMARY KEY,
+    student_id TEXT UNIQUE NOT NULL,
+    student_name TEXT NOT NULL,
+    department TEXT,
+    year TEXT,
+    division TEXT,
+    semester TEXT,
+    email TEXT UNIQUE NOT NULL,
+    phone_number TEXT,
+    status TEXT DEFAULT 'active',
+    embeddings JSONB DEFAULT '[]'::jsonb,
+    face_registered BOOLEAN DEFAULT FALSE,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- Auth users table (FIXED: password_hash -> password)
+CREATE TABLE auth_users (
+    id SERIAL PRIMARY KEY,
+    username TEXT,
+    email TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    user_type TEXT NOT NULL CHECK (user_type IN ('student', 'teacher')),
+    employee_id TEXT,
+    department TEXT,
+    status TEXT DEFAULT 'active',
+    created_at INTEGER NOT NULL
+);
+
+-- Auth teachers table (FIXED: password_hash -> password)
+CREATE TABLE auth_teachers (
+    id SERIAL PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    employee_id TEXT UNIQUE NOT NULL,
+    department TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- Attendance sessions table (for duration feature)
+CREATE TABLE attendance_sessions (
+    id SERIAL PRIMARY KEY,
+    date TEXT,
+    subject TEXT,
+    department TEXT,
+    year TEXT,
+    division TEXT,
+    created_at TEXT,
+    duration_minutes INTEGER DEFAULT 10,
+    expires_at TEXT,
+    finalized BOOLEAN DEFAULT FALSE,
+    ended_at TEXT,
+    students JSONB DEFAULT '[]'::jsonb,
+    created_at_ts TIMESTAMP DEFAULT NOW()
+);
+
+-- Attendance records table
+CREATE TABLE attendance_records (
+    id SERIAL PRIMARY KEY,
+    session_id INTEGER REFERENCES attendance_sessions(id),
+    student_id TEXT NOT NULL,
+    student_name TEXT NOT NULL,
+    present BOOLEAN DEFAULT FALSE,
+    marked_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+** INSTRUCTIONS **
+
+1. Go to Supabase Dashboard SQL Editor
+2. Copy and paste the DROP statements first (to clean up)
+3. Then copy and paste the CREATE statements
+4. Run each section
+5. Test signup/signin and attendance session creation
+
+** KEY FIXES **
+- Changed "password_hash" to "password" in auth_users and auth_teachers tables
+- Added missing "username" column to auth_users
+- Added missing "department" and "status" columns
+- All columns now match what the backend code expects

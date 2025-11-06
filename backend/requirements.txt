@@ -1,6 +1,6 @@
 flask
 flask-cors
-pymongo
+supabase
 deepface
 mtcnn
 numpy

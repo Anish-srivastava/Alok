@@ -5,7 +5,7 @@ import base64
 import numpy as np
 from flask import Blueprint, request, jsonify, current_app
 from bson.objectid import ObjectId
-from datetime import datetime
+from datetime import datetime, timedelta
 from PIL import Image
 from scipy.spatial.distance import cosine
 from deepface import DeepFace
@@ -85,7 +85,7 @@ def extract_embedding_optimized(face_rgb):
 
 def get_attendance_collection():
     """Get the attendance collection from app config"""
-    return current_app.config.get("ATTENDANCE_COLLECTION")
+    return current_app.config.get("SUPABASE")
 
 # Enhanced embedding cache for attendance sessions
 class AttendanceEmbeddingCache:
@@ -180,8 +180,14 @@ def find_best_match_optimized_attendance(query_embedding, students_col, session_
 def create_session():
     """Create a new attendance session"""
     data = request.json
-    db = current_app.config.get("DB")
-    students_col = db.students
+    supabase = current_app.config.get("SUPABASE")
+    # Read duration (minutes) if provided (default 10 minutes)
+    try:
+        duration_minutes = int(data.get("duration", 10))
+        if duration_minutes <= 0:
+            duration_minutes = 10
+    except Exception:
+        duration_minutes = 10
 
     # Build base session document
     session_doc = {
@@ -190,7 +196,10 @@ def create_session():
         "department": data.get("department"),
         "year": data.get("year"),
         "division": data.get("division"),
-        "created_at": datetime.now(),
+        "created_at": datetime.now().isoformat(),
+        "duration_minutes": duration_minutes,
+        # session expires after duration_minutes from creation
+        "expires_at": (datetime.now() + timedelta(minutes=duration_minutes)).isoformat(),
         "finalized": False,
         "ended_at": None,
         "students": []
@@ -203,10 +212,19 @@ def create_session():
     if data.get("division"): student_filter["division"] = data.get("division")
 
     try:
-        students = list(students_col.find(student_filter)) if student_filter else []
+        # Use Supabase to get students
+        if student_filter:
+            query = supabase.table('students').select('student_id, student_name, department, year, division')
+            for key, value in student_filter.items():
+                query = query.eq(key, value)
+            response = query.execute()
+            students = response.data
+        else:
+            students = []
+            
         for s in students:
-            sid = s.get("studentId") or s.get("student_id")
-            name = s.get("studentName") or s.get("student_name")
+            sid = s.get("student_id")
+            name = s.get("student_name")
             session_doc["students"].append({
                 "student_id": sid,
                 "student_name": name,
@@ -220,9 +238,21 @@ def create_session():
         logger.error(f"Error preloading students: {e}")
         # Continue with empty students list
 
-    collection = get_attendance_collection()
-    session_id = collection.insert_one(session_doc).inserted_id
-    return jsonify({"session_id": str(session_id), "students_count": len(session_doc["students"])})
+    try:
+        # Insert session into Supabase attendance_sessions table
+        response = supabase.table('attendance_sessions').insert(session_doc).execute()
+        session_id = response.data[0]['id']
+        
+        # return expires_at as ISO string for frontend timers
+        return jsonify({
+            "session_id": str(session_id),
+            "students_count": len(session_doc["students"]),
+            "duration_minutes": duration_minutes,
+            "expires_at": session_doc["expires_at"]
+        })
+    except Exception as e:
+        logger.error(f"Error creating session in Supabase: {e}")
+        return jsonify({"error": "Failed to create session"}), 500
 
 @attendance_session_bp.route("/end_session", methods=["POST"])
 def end_session():
@@ -336,8 +366,21 @@ def mark_attendance_with_duplicate_prevention():
         session_doc = collection.find_one({"_id": ObjectId(session_id)})
         if not session_doc:
             return jsonify({"error": "Session not found"}), 404
+
+        # Check if session already finalized
         if session_doc.get("finalized"):
             return jsonify({"error": "Session already finalized"}), 400
+
+        # Check if session has expired based on duration
+        expires_at = session_doc.get("expires_at")
+        if expires_at:
+            # expires_at stored as datetime in MongoDB
+            now = datetime.now()
+            if now > expires_at:
+                # finalize session and return expired message
+                collection.update_one({"_id": ObjectId(session_id)}, {"$set": {"finalized": True, "ended_at": now}})
+                logger.info(f"Session {session_id} expired at {expires_at}, auto-finalized")
+                return jsonify({"error": "Session expired"}), 400
 
         # GET LIST OF ALREADY MARKED STUDENTS IN THIS SESSION
         already_present_students = set()
@@ -555,6 +598,199 @@ def mark_attendance_with_duplicate_prevention():
 
     except Exception as e:
         logger.error(f"Error ending session: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Get active sessions for students
+@attendance_session_bp.route("/active_sessions", methods=["GET"])
+def get_active_sessions():
+    """Get all active attendance sessions that haven't expired"""
+    supabase = current_app.config.get("SUPABASE")
+    
+    try:
+        # Get current time
+        current_time = datetime.now().isoformat()
+        
+        # Fetch active sessions that haven't expired and aren't finalized
+        response = supabase.table('attendance_sessions').select('*').eq('finalized', False).gt('expires_at', current_time).execute()
+        sessions = response.data
+        
+        # Format sessions for frontend
+        active_sessions = []
+        for session in sessions:
+            active_sessions.append({
+                "session_id": session['id'],
+                "date": session['date'],
+                "subject": session['subject'],
+                "department": session['department'],
+                "year": session['year'],
+                "division": session['division'],
+                "duration_minutes": session['duration_minutes'],
+                "expires_at": session['expires_at'],
+                "created_at": session['created_at']
+            })
+        
+        return jsonify({
+            "success": True,
+            "active_sessions": active_sessions,
+            "count": len(active_sessions)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching active sessions: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Mark attendance for a student in a session
+@attendance_session_bp.route("/mark_attendance", methods=["POST"])
+def mark_attendance():
+    """Mark attendance for a student in an active session"""
+    data = request.json
+    supabase = current_app.config.get("SUPABASE")
+    
+    session_id = data.get("session_id")
+    student_id = data.get("student_id")
+    student_name = data.get("student_name")
+    
+    if not session_id or not student_id or not student_name:
+        return jsonify({"success": False, "error": "Missing required fields"}), 400
+    
+    try:
+        # Check if session exists and is active
+        current_time = datetime.now().isoformat()
+        session_response = supabase.table('attendance_sessions').select('*').eq('id', session_id).eq('finalized', False).gt('expires_at', current_time).execute()
+        
+        if not session_response.data:
+            return jsonify({"success": False, "error": "Session not found or expired"}), 404
+        
+        session = session_response.data[0]
+        
+        # Check if student is already marked present
+        existing_record = supabase.table('attendance_records').select('*').eq('session_id', session_id).eq('student_id', student_id).execute()
+        
+        if existing_record.data:
+            return jsonify({"success": False, "error": "Attendance already marked for this student"}), 400
+        
+        # Create attendance record
+        attendance_record = {
+            "session_id": session_id,
+            "student_id": student_id,
+            "student_name": student_name,
+            "present": True,
+            "marked_at": datetime.now().isoformat()
+        }
+        
+        # Insert attendance record
+        supabase.table('attendance_records').insert(attendance_record).execute()
+        
+        # Update session's students array to mark as present
+        students = session.get('students', [])
+        for student in students:
+            if student.get('student_id') == student_id:
+                student['present'] = True
+                student['marked_at'] = datetime.now().isoformat()
+                break
+        
+        # Update session with modified students array
+        supabase.table('attendance_sessions').update({"students": students}).eq('id', session_id).execute()
+        
+        return jsonify({
+            "success": True,
+            "message": "Attendance marked successfully",
+            "student_id": student_id,
+            "student_name": student_name,
+            "session_id": session_id
+        })
+        
+    except Exception as e:
+        logger.error(f"Error marking attendance: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Check if student has already marked attendance for active sessions
+@attendance_session_bp.route("/check_attendance/<student_id>", methods=["GET"])
+def check_student_attendance(student_id):
+    """Check if student has marked attendance for any active sessions"""
+    supabase = current_app.config.get("SUPABASE")
+    
+    try:
+        # Get current time
+        current_time = datetime.now().isoformat()
+        
+        # Check for attendance records in active sessions
+        attendance_response = supabase.table('attendance_records').select('session_id').eq('student_id', student_id).execute()
+        
+        if attendance_response.data:
+            # Get session IDs where student has marked attendance
+            marked_session_ids = [record['session_id'] for record in attendance_response.data]
+            
+            # Check if any of these sessions are still active
+            active_marked_sessions = []
+            for session_id in marked_session_ids:
+                session_response = supabase.table('attendance_sessions').select('*').eq('id', session_id).eq('finalized', False).gt('expires_at', current_time).execute()
+                if session_response.data:
+                    active_marked_sessions.append(session_response.data[0])
+            
+            return jsonify({
+                "success": True,
+                "has_marked_attendance": len(active_marked_sessions) > 0,
+                "marked_sessions": active_marked_sessions
+            })
+        
+        return jsonify({
+            "success": True,
+            "has_marked_attendance": False,
+            "marked_sessions": []
+        })
+        
+    except Exception as e:
+        logger.error(f"Error checking student attendance: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Get attendance records for a session (for teachers)
+@attendance_session_bp.route("/session_attendance/<session_id>", methods=["GET"])
+def get_session_attendance(session_id):
+    """Get all attendance records for a specific session"""
+    supabase = current_app.config.get("SUPABASE")
+    
+    try:
+        # Get session details
+        session_response = supabase.table('attendance_sessions').select('*').eq('id', session_id).execute()
+        
+        if not session_response.data:
+            return jsonify({"success": False, "error": "Session not found"}), 404
+        
+        session = session_response.data[0]
+        
+        # Get attendance records for this session
+        attendance_response = supabase.table('attendance_records').select('*').eq('session_id', session_id).execute()
+        attendance_records = attendance_response.data
+        
+        # Count present and total students
+        total_students = len(session.get('students', []))
+        present_count = len(attendance_records)
+        
+        return jsonify({
+            "success": True,
+            "session": {
+                "id": session['id'],
+                "date": session['date'],
+                "subject": session['subject'],
+                "department": session['department'],
+                "year": session['year'],
+                "division": session['division'],
+                "created_at": session['created_at'],
+                "expires_at": session['expires_at'],
+                "finalized": session['finalized']
+            },
+            "attendance_records": attendance_records,
+            "statistics": {
+                "total_students": total_students,
+                "present_count": present_count,
+                "absent_count": total_students - present_count,
+                "attendance_percentage": round((present_count / total_students * 100) if total_students > 0 else 0, 1)
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching session attendance: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 # Health check for attendance models

@@ -1,0 +1,41 @@
+=== SUPABASE TABLE CREATION INSTRUCTIONS ===
+
+To fix the "500 Internal Server Error" when creating attendance sessions:
+
+1. Go to your Supabase Dashboard:
+   https://megrkujckfrtbrhwakmo.supabase.co/project/megrkujckfrtbrhwakmo
+
+2. Click "SQL Editor" in the left sidebar
+
+3. Copy and paste this SQL command:
+
+CREATE TABLE attendance_sessions (
+    id SERIAL PRIMARY KEY,
+    date TEXT,
+    subject TEXT,
+    department TEXT,
+    year TEXT,
+    division TEXT,
+    created_at TEXT,
+    duration_minutes INTEGER DEFAULT 10,
+    expires_at TEXT,
+    finalized BOOLEAN DEFAULT FALSE,
+    ended_at TEXT,
+    students JSONB DEFAULT '[]'::jsonb,
+    created_at_ts TIMESTAMP DEFAULT NOW()
+);
+
+4. Click "Run" to execute the SQL
+
+5. After creating the table, try creating an attendance session again
+
+FEATURES THAT WILL WORK AFTER TABLE CREATION:
+- Duration selector (5, 10, 20, 30 minutes) in session creation form
+- Countdown timer showing remaining time in the header
+- Auto-expiration: session stops accepting attendance after time expires
+- Frontend auto-finalizes and shows "Session has ended (time expired)" message
+
+TESTING:
+- Create a 5-minute session to quickly test the auto-expiration feature
+- The header will show "Time left: 4m 59s" and count down
+- When time reaches zero, recognition stops automatically

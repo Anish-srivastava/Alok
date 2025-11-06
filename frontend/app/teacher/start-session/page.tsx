@@ -9,6 +9,7 @@ export default function DemoSessionPage() {
   const router = useRouter();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
+  const [sessionExpires, setSessionExpires] = useState<string | null>(null);
   const [recognitionStarted, setRecognitionStarted] = useState(false);
   const [status, setStatus] = useState("");
   const [facesData, setFacesData] = useState<FaceData[]>([]);
@@ -20,6 +21,7 @@ export default function DemoSessionPage() {
     department: "",
     year: "",
     division: "",
+    duration: "10", // duration in minutes (default 10)
   });
 
   const departments = ["Computer Science", "IT", "Electronics", "Mechanical", "Civil"];
@@ -31,21 +33,25 @@ export default function DemoSessionPage() {
   };
 
   const createSession = async () => {
-    if (!form.date || !form.subject || !form.department || !form.year || !form.division) {
+    if (!form.date || !form.subject || !form.department || !form.year || !form.division || !form.duration) {
       setStatus("Please fill all fields");
       return;
     }
 
     setStatus("Creating session...");
     try {
+      // ensure duration is integer
+      const payload = { ...form, duration: parseInt(form.duration, 10) };
+
       const res = await fetch("http://localhost:5000/api/attendance/create_session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.session_id) {
         setSessionId(data.session_id);
+        if (data.expires_at) setSessionExpires(data.expires_at);
         setStatus("✅ Session created! Click Start Recognition.");
         setSessionActive(true);
       } else {
@@ -103,6 +109,44 @@ export default function DemoSessionPage() {
     setRecognitionStarted(true);
     setStatus("Starting live recognition...");
   };
+
+  const getTimeLeft = () => {
+    if (!sessionExpires) return null;
+    const now = new Date();
+    const expires = new Date(sessionExpires);
+    const diff = Math.max(0, expires.getTime() - now.getTime());
+    const minutes = Math.floor(diff / 60000);
+    const seconds = Math.floor((diff % 60000) / 1000);
+    return `${minutes}m ${seconds}s`;
+  };
+
+  // Auto-stop / finalize session when expires
+  React.useEffect(() => {
+    if (!sessionId || !sessionExpires) return;
+
+    const checkInterval = setInterval(async () => {
+      try {
+        const now = new Date();
+        const expires = new Date(sessionExpires);
+        if (now >= expires) {
+          // call backend to finalize the session
+          await fetch("http://localhost:5000/api/attendance/end_session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: sessionId }),
+          });
+          setRecognitionStarted(false);
+          setSessionActive(false);
+          setStatus("⏰ Session has ended (time expired)");
+          clearInterval(checkInterval);
+        }
+      } catch (err) {
+        console.error("Error finalizing session on expiry:", err);
+      }
+    }, 2000);
+
+    return () => clearInterval(checkInterval);
+  }, [sessionId, sessionExpires]);
 
   const handleStopRecognition = () => {
     setRecognitionStarted(false);
@@ -214,7 +258,13 @@ export default function DemoSessionPage() {
                   {recognitionStarted ? "Active" : sessionId ? "Ready" : "Setup"}
                 </span>
               </div>
-              
+              {sessionExpires && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/70 border border-gray-200">
+                  <span className="text-gray-600">Time left:</span>
+                  <span className="font-medium text-gray-800">{getTimeLeft()}</span>
+                </div>
+              )}
+
               <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/70 border border-gray-200">
                 <span className="text-gray-600">Students:</span>
                 <span className="font-medium text-gray-800">
@@ -310,6 +360,22 @@ export default function DemoSessionPage() {
                         ))}
                       </select>
                     </div>
+                  </div>
+
+                  {/* Session Duration selector */}
+                  <div>
+                    <label className="text-gray-700 text-sm mb-2 block font-medium">Session Duration (minutes)</label>
+                    <select
+                      name="duration"
+                      value={form.duration}
+                      onChange={handleChange}
+                      className="w-full p-3 rounded-lg bg-white/60 border border-gray-200 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"
+                    >
+                      <option value="5">5 minutes</option>
+                      <option value="10">10 minutes</option>
+                      <option value="20">20 minutes</option>
+                      <option value="30">30 minutes</option>
+                    </select>
                   </div>
 
                   <button 

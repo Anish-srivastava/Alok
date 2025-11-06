@@ -6,15 +6,9 @@ from PIL import Image
 import io
 from deepface import DeepFace
 from mtcnn import MTCNN
-from pymongo import MongoClient
-from bson.objectid import ObjectId
 import logging
 
 student_registration_bp = Blueprint("student_registration", __name__)
-client = MongoClient("MONGODB_URI")
-db = client["DATABASE_NAME"]
-students_collection = db["students"]
-detector = MTCNN()
 logger = logging.getLogger(__name__)
 
 def read_image_from_bytes(b):
@@ -22,6 +16,8 @@ def read_image_from_bytes(b):
     return np.array(img)
 
 def detect_faces_rgb(rgb_image):
+    # Get detector from app config
+    detector = current_app.config.get("MTCNN_DETECTOR")
     detections = detector.detect_faces(rgb_image)
     faces = []
     for d in detections:
@@ -49,10 +45,8 @@ def register_student():
     if not data:
         return jsonify({"success": False, "error": "Invalid JSON data"}), 400
 
-    # Get logged-in user info from headers
-    # Simplified: only validate fields and ensure uniqueness of studentId and email
-    db = current_app.config.get("DB")
-    students_col = db.students
+    # Get Supabase client from app config
+    supabase = current_app.config.get("SUPABASE")
 
     # Check required fields
     required_fields = ['studentName', 'studentId', 'department', 'year', 'division', 'semester', 'email', 'phoneNumber', 'images']
@@ -61,9 +55,12 @@ def register_student():
             return jsonify({"success": False, "error": f"{field} is required"}), 400
 
     # Check uniqueness of studentId and email
-    if students_col.find_one({'studentId': data['studentId']}):
+    student_id_check = supabase.table('students').select("id").eq("student_id", data['studentId']).execute()
+    if student_id_check.data:
         return jsonify({"success": False, "error": "Student ID already exists"}), 400
-    if students_col.find_one({'email': data['email']}):
+    
+    email_check = supabase.table('students').select("id").eq("email", data['email']).execute()
+    if email_check.data:
         return jsonify({"success": False, "error": "Email already registered"}), 400
 
     # Validate images
@@ -90,31 +87,37 @@ def register_student():
         embeddings.append(emb.tolist())
 
     student_data = {
-        "studentId": data['studentId'],
-        "studentName": data['studentName'],
+        "student_id": data['studentId'],
+        "student_name": data['studentName'],
         "department": data['department'],
         "year": data['year'],
         "division": data['division'],
         "semester": data['semester'],
         "email": data['email'],
-        "phoneNumber": data['phoneNumber'],
+        "phone_number": data['phoneNumber'],
         "status": "active",
         "embeddings": embeddings,
         "face_registered": True,
-        "created_at": time.time(),
-        "updated_at": time.time()
+        "created_at": int(time.time()),
+        "updated_at": int(time.time())
     }
 
-    result = students_col.insert_one(student_data)
-    return jsonify({"success": True, "studentId": data['studentId'], "record_id": str(result.inserted_id)})
+    result = supabase.table('students').insert(student_data).execute()
+    
+    if result.data:
+        return jsonify({"success": True, "studentId": data['studentId'], "record_id": result.data[0]['id']})
+    else:
+        return jsonify({"success": False, "error": "Failed to register student"}), 500
 
 @student_registration_bp.route('/api/students/count', methods=['GET'])
 def get_student_count():
-    db = current_app.config.get("DB")
-    return jsonify({"success": True, "count": db.students.count_documents({})})
+    supabase = current_app.config.get("SUPABASE")
+    result = supabase.table('students').select("id", count="exact").execute()
+    return jsonify({"success": True, "count": result.count})
 
 @student_registration_bp.route('/api/students/departments', methods=['GET'])
 def get_departments():
-    db = current_app.config.get("DB")
-    departments = db.students.distinct("department")
+    supabase = current_app.config.get("SUPABASE")
+    result = supabase.table('students').select("department").execute()
+    departments = list(set([row['department'] for row in result.data if row.get('department')]))
     return jsonify({"success": True, "departments": departments, "count": len(departments)})

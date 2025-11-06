@@ -9,6 +9,7 @@ from deepface import DeepFace
 from scipy.spatial.distance import cosine
 import logging
 import threading
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,9 @@ def detect_faces_rgb_optimized(rgb_image, detector):
             if w > 40 and h > 40:  # Filter small faces
                 face_rgb = rgb_image[y:y+h, x:x+w]
                 faces.append({
-                    "box": (x, y, w, h), 
+                    "box": (int(x), int(y), int(w), int(h)),  # Convert to regular int
                     "face": face_rgb, 
-                    "confidence": d["confidence"]
+                    "confidence": float(d["confidence"])  # Convert to regular float
                 })
 
     return faces
@@ -75,7 +76,7 @@ class EmbeddingCache:
         self.cache_duration = 300  # 5 minutes
         self.lock = threading.Lock()
 
-    def get_embeddings(self, students_col):
+    def get_embeddings(self, supabase_client):
         current_time = time.time()
 
         # Thread-safe cache check
@@ -85,36 +86,39 @@ class EmbeddingCache:
 
                 logger.info("Refreshing embedding cache...")
 
-                # Fetch students with embeddings
-                students = list(students_col.find(
-                    {"embeddings": {"$exists": True, "$ne": None}},
-                    {"studentId": 1, "studentName": 1, "embeddings": 1}
-                ))
+                try:
+                    # Fetch students with embeddings from Supabase
+                    response = supabase_client.table('students').select('student_id, student_name, embeddings').not_.is_('embeddings', 'null').execute()
+                    students = response.data
 
-                # Process embeddings
-                self.student_embeddings = []
-                for student in students:
-                    embeddings = student.get('embeddings', [])
-                    if embeddings:
-                        # Average multiple embeddings if available
-                        avg_embedding = np.mean(embeddings, axis=0).astype(np.float32)
-                        self.student_embeddings.append({
-                            'embedding': avg_embedding,
-                            'studentId': student.get('studentId'),
-                            'studentName': student.get('studentName')
-                        })
+                    # Process embeddings
+                    self.student_embeddings = []
+                    for student in students:
+                        embeddings = student.get('embeddings', [])
+                        if embeddings and len(embeddings) > 0:
+                            # Average multiple embeddings if available
+                            avg_embedding = np.mean(embeddings, axis=0).astype(np.float32)
+                            self.student_embeddings.append({
+                                'embedding': avg_embedding,
+                                'studentId': student.get('student_id'),
+                                'studentName': student.get('student_name')
+                            })
 
-                self.last_update = current_time
-                logger.info(f"Cache refreshed with {len(self.student_embeddings)} students")
+                    self.last_update = current_time
+                    logger.info(f"Cache refreshed with {len(self.student_embeddings)} students")
+
+                except Exception as e:
+                    logger.error(f"Error fetching embeddings from Supabase: {e}")
+                    self.student_embeddings = []
 
         return self.student_embeddings
 
 # Global embedding cache instance
 embedding_cache = EmbeddingCache()
 
-def find_best_match_optimized(query_embedding, students_col, threshold=0.6):
+def find_best_match_optimized(query_embedding, supabase_client, threshold=0.6):
     """Optimized database search with caching"""
-    cached_embeddings = embedding_cache.get_embeddings(students_col)
+    cached_embeddings = embedding_cache.get_embeddings(supabase_client)
 
     if not cached_embeddings:
         return None, float('inf')
@@ -151,8 +155,7 @@ def demo_recognize_optimized():
     detector = model_manager.get_detector()
 
     data = request.get_json()
-    db = current_app.config.get("DB")
-    students_col = db.students
+    supabase_client = current_app.config.get("SUPABASE")
     threshold = float(current_app.config.get("THRESHOLD", "0.6"))
 
     image_b64 = data.get("image", "")
@@ -198,7 +201,7 @@ def demo_recognize_optimized():
 
         # Search for best match with timing
         search_start = time.time()
-        best_match, min_distance = find_best_match_optimized(emb, students_col, threshold)
+        best_match, min_distance = find_best_match_optimized(emb, supabase_client, threshold)
         search_time = time.time() - search_start
 
         if best_match:
@@ -208,11 +211,11 @@ def demo_recognize_optimized():
                     "name": best_match["studentName"]
                 },
                 "distance": round(float(min_distance), 4),
-                "confidence": round((1 - min_distance) * 100, 1),
+                "confidence": round(float(1 - min_distance) * 100, 1),
                 "box": f["box"],
                 "timing": {
-                    "embedding": round(embedding_time, 3),
-                    "search": round(search_time, 3)
+                    "embedding": round(float(embedding_time), 3),
+                    "search": round(float(search_time), 3)
                 }
             })
         else:
@@ -221,8 +224,8 @@ def demo_recognize_optimized():
                 "distance": round(float(min_distance), 4), 
                 "box": f["box"],
                 "timing": {
-                    "embedding": round(embedding_time, 3),
-                    "search": round(search_time, 3)
+                    "embedding": round(float(embedding_time), 3),
+                    "search": round(float(search_time), 3)
                 }
             })
 
@@ -231,10 +234,10 @@ def demo_recognize_optimized():
     return jsonify({
         "success": True, 
         "faces": results, 
-        "processing_time": round(total_time, 3),
+        "processing_time": round(float(total_time), 3),
         "detailed_timing": {
-            "detection": round(detection_time, 3),
-            "total": round(total_time, 3)
+            "detection": round(float(detection_time), 3),
+            "total": round(float(total_time), 3)
         },
         "performance_info": {
             "models_preloaded": True,
@@ -283,6 +286,177 @@ def log_recognition(session_id):
     )
 
     return jsonify({"success": True, "message": "Recognition logged"})
+
+# Mark attendance using face recognition
+@demo_session_bp.route("/api/demo/mark_attendance", methods=["POST"])
+def mark_attendance_with_recognition():
+    """Mark attendance for a student using face recognition in an active session"""
+    start_time = time.time()
+
+    # Get model manager from Flask config
+    model_manager = current_app.config.get("MODEL_MANAGER")
+    if not model_manager or not model_manager.is_ready():
+        logger.error("Models not ready")
+        return jsonify({
+            "success": False, 
+            "error": "Face recognition models not initialized"
+        }), 503
+
+    # Get preloaded detector
+    detector = model_manager.get_detector()
+
+    data = request.get_json()
+    supabase_client = current_app.config.get("SUPABASE")
+    threshold = float(current_app.config.get("THRESHOLD", "0.6"))
+
+    session_id = data.get("session_id")
+    image_b64 = data.get("image", "")
+    
+    if not session_id:
+        return jsonify({"success": False, "error": "Session ID required"}), 400
+    
+    if image_b64.startswith("data:"):
+        image_b64 = image_b64.split(",", 1)[1]
+
+    try:
+        # Optimized image processing
+        rgb = read_image_from_bytes_optimized(base64.b64decode(image_b64))
+    except Exception as e:
+        logger.error(f"Image processing error: {e}")
+        return jsonify({"success": False, "error": "Invalid base64 image"}), 400
+
+    # Check if session exists and is active
+    try:
+        from datetime import datetime
+        current_time = datetime.now().isoformat()
+        session_response = supabase_client.table('attendance_sessions').select('*').eq('id', session_id).eq('finalized', False).gt('expires_at', current_time).execute()
+        
+        if not session_response.data:
+            return jsonify({"success": False, "error": "Session not found or expired"}), 404
+        
+        session = session_response.data[0]
+    except Exception as e:
+        logger.error(f"Session validation error: {e}")
+        return jsonify({"success": False, "error": "Failed to validate session"}), 500
+
+    # Face detection
+    detection_start = time.time()
+    faces = detect_faces_rgb_optimized(rgb, detector)
+    detection_time = time.time() - detection_start
+
+    if len(faces) == 0:
+        return jsonify({
+            "success": False, 
+            "error": "No face detected in the image",
+            "processing_time": round(time.time() - start_time, 3)
+        })
+
+    # Process the first detected face
+    face = faces[0]
+    embedding_start = time.time()
+    emb = extract_embedding_optimized(face["face"])
+    embedding_time = time.time() - embedding_start
+
+    if emb is None:
+        return jsonify({
+            "success": False,
+            "error": "Failed to extract face embedding",
+            "processing_time": round(time.time() - start_time, 3)
+        })
+
+    # Search for best match
+    search_start = time.time()
+    best_match, min_distance = find_best_match_optimized(emb, supabase_client, threshold)
+    search_time = time.time() - search_start
+
+    if not best_match:
+        return jsonify({
+            "success": False,
+            "error": "Face not recognized. Please register first.",
+            "processing_time": round(time.time() - start_time, 3),
+            "timing": {
+                "detection": round(detection_time, 3),
+                "embedding": round(embedding_time, 3),
+                "search": round(search_time, 3)
+            }
+        })
+
+    student_id = best_match["studentId"]
+    student_name = best_match["studentName"]
+
+    try:
+        # Check if student is already marked present in this session
+        existing_record = supabase_client.table('attendance_records').select('*').eq('session_id', session_id).eq('student_id', student_id).execute()
+        
+        if existing_record.data:
+            return jsonify({
+                "success": False,
+                "error": f"Attendance already marked for {student_name}",
+                "student_name": student_name,
+                "student_id": student_id
+            })
+
+        # Mark attendance by calling the attendance API
+        attendance_data = {
+            "session_id": session_id,
+            "student_id": student_id,
+            "student_name": student_name
+        }
+        
+        # Create attendance record
+        attendance_record = {
+            "session_id": session_id,
+            "student_id": student_id,
+            "student_name": student_name,
+            "present": True,
+            "marked_at": datetime.now().isoformat()
+        }
+        
+        # Insert attendance record
+        supabase_client.table('attendance_records').insert(attendance_record).execute()
+        
+        # Update session's students array to mark as present
+        students = session.get('students', [])
+        for student in students:
+            if student.get('student_id') == student_id:
+                student['present'] = True
+                student['marked_at'] = datetime.now().isoformat()
+                break
+        
+        # Update session with modified students array
+        supabase_client.table('attendance_sessions').update({"students": students}).eq('id', session_id).execute()
+
+        return jsonify({
+            "success": True,
+            "message": f"Attendance marked successfully for {student_name}",
+            "student": {
+                "student_id": student_id,
+                "student_name": student_name,
+                "confidence": round((1 - min_distance) * 100, 1),
+                "distance": round(float(min_distance), 4)
+            },
+            "session": {
+                "session_id": session_id,
+                "subject": session['subject'],
+                "department": session['department'],
+                "year": session['year'],
+                "division": session['division']
+            },
+            "processing_time": round(time.time() - start_time, 3),
+            "timing": {
+                "detection": round(detection_time, 3),
+                "embedding": round(embedding_time, 3),
+                "search": round(search_time, 3)
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error marking attendance: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"Failed to mark attendance: {str(e)}",
+            "processing_time": round(time.time() - start_time, 3)
+        }), 500
 
 @demo_session_bp.route('/api/demo/models/status', methods=['GET'])
 def model_status():

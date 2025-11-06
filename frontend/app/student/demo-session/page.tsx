@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Camera, ArrowLeft, Play, Square, User, BarChart3 } from "lucide-react";
+import { Camera, ArrowLeft, Play, Square, User, BarChart3, Clock, CheckCircle, BookOpen, Users } from "lucide-react";
 import CameraCapture, { FaceData } from "../../components/CameraCapture";
 
 interface RecognizeResult {
@@ -12,35 +12,334 @@ interface RecognizeResult {
   box?: [number, number, number, number];
 }
 
+interface AttendanceSession {
+  session_id: string;
+  date: string;
+  subject: string;
+  department: string;
+  year: string;
+  division: string;
+  duration_minutes: number;
+  expires_at: string;
+  created_at: string;
+}
+
+interface AttendanceStatus {
+  has_marked_attendance: boolean;
+  marked_sessions: AttendanceSession[];
+}
+
 export default function DemoSession() {
   const router = useRouter();
   const [isLiveActive, setIsLiveActive] = useState(false);
   const [lastResult, setLastResult] = useState<RecognizeResult | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
+  const [activeSessions, setActiveSessions] = useState<AttendanceSession[]>([]);
+  const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus | null>(null);
+  const [selectedSession, setSelectedSession] = useState<AttendanceSession | null>(null);
+  const [attendanceCompleted, setAttendanceCompleted] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [studentId, setStudentId] = useState<string>("");
+  const [status, setStatus] = useState("");
+  const [markingAttendance, setMarkingAttendance] = useState(false);
+  const [demoRecognitionActive, setDemoRecognitionActive] = useState(false);
+  const [demoResult, setDemoResult] = useState<RecognizeResult | null>(null);
+  const [cameraMode, setCameraMode] = useState<"attendance" | "demo" | "off">("off");
+  const [recognitionStatus, setRecognitionStatus] = useState<"idle" | "detecting" | "recognizing" | "success" | "failed">("idle");
+  const [recognitionCount, setRecognitionCount] = useState(0);
+  const [lastRecognitionTime, setLastRecognitionTime] = useState<Date | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "error">("checking");
 
-  const handleRecognize = useCallback(async (dataUrl: string) => {
-    if (!isLiveActive) return;
+  // Get student ID from localStorage
+  useEffect(() => {
+    const storedStudentId = localStorage.getItem("studentId") || localStorage.getItem("username");
+    if (storedStudentId) {
+      setStudentId(storedStudentId);
+    }
+  }, []);
+
+  // Fetch active sessions and check attendance status
+  const fetchSessionsAndStatus = useCallback(async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch active sessions
+      const sessionsRes = await fetch("http://localhost:5000/api/attendance/active_sessions");
+      const sessionsData = await sessionsRes.json();
+      
+      if (sessionsData.success) {
+        setActiveSessions(sessionsData.active_sessions);
+      }
+
+      // Check attendance status for current student
+      if (studentId) {
+        const statusRes = await fetch(`http://localhost:5000/api/attendance/check_attendance/${studentId}`);
+        const statusData = await statusRes.json();
+        
+        if (statusData.success) {
+          setAttendanceStatus(statusData);
+          setAttendanceCompleted(statusData.has_marked_attendance);
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching sessions and status:", error);
+      setStatus("Error loading sessions");
+    } finally {
+      setLoading(false);
+    }
+  }, [studentId]);
+
+  // Test backend connection
+  const testConnection = useCallback(async () => {
+    try {
+      setConnectionStatus("checking");
+      const res = await fetch("http://127.0.0.1:5000/api/demo/recognize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD" }), // Minimal test image
+      });
+      
+      if (res.ok) {
+        setConnectionStatus("connected");
+      } else {
+        setConnectionStatus("error");
+      }
+    } catch (error) {
+      console.error("Connection test failed:", error);
+      setConnectionStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    testConnection();
+    const interval = setInterval(testConnection, 30000); // Test every 30 seconds
+    return () => clearInterval(interval);
+  }, [testConnection]);
+
+  useEffect(() => {
+    fetchSessionsAndStatus();
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchSessionsAndStatus, 30000);
+    return () => clearInterval(interval);
+  }, [fetchSessionsAndStatus]);
+
+  // Calculate time remaining for a session
+  const getTimeRemaining = (expiresAt: string) => {
+    const now = new Date();
+    const expires = new Date(expiresAt);
+    const diff = expires.getTime() - now.getTime();
+    
+    if (diff <= 0) return "Expired";
+    
+    const minutes = Math.floor(diff / (1000 * 60));
+    const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+    
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const handleMarkAttendance = useCallback(async (imageDataUrl: string) => {
+    if (!selectedSession || markingAttendance) return;
+
+    setMarkingAttendance(true);
+    setStatus("Processing attendance...");
 
     try {
+      const res = await fetch("http://127.0.0.1:5000/api/demo/mark_attendance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          session_id: selectedSession.session_id,
+          image: imageDataUrl 
+        }),
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        setStatus(`✅ ${data.message}`);
+        setAttendanceCompleted(true);
+        setSelectedSession(null);
+        setIsLiveActive(false);
+        // Refresh the sessions and status
+        await fetchSessionsAndStatus();
+      } else {
+        setStatus(`❌ ${data.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus("❌ Error marking attendance");
+    } finally {
+      setMarkingAttendance(false);
+    }
+  }, [selectedSession, markingAttendance, fetchSessionsAndStatus]);
+
+  const handleRecognize = useCallback(async (dataUrl: string) => {
+    if (cameraMode === "attendance" && isLiveActive && selectedSession) {
+      await handleMarkAttendance(dataUrl);
+    } else if (cameraMode === "demo" && demoRecognitionActive) {
+      await handleDemoRecognition(dataUrl);
+    }
+  }, [cameraMode, isLiveActive, selectedSession, demoRecognitionActive, handleMarkAttendance]);
+
+  const handleDemoRecognition = useCallback(async (dataUrl: string) => {
+    if (!demoRecognitionActive) return;
+
+    try {
+      setRecognitionStatus("recognizing");
+      setRecognitionCount(prev => prev + 1);
+      setStatus("🔍 Analyzing face with stored photos...");
+      
       const res = await fetch("http://127.0.0.1:5000/api/demo/recognize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: dataUrl }),
       });
+      
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+      
       const data = await res.json();
-
-      if (data.success && data.faces && data.faces.length > 0) {
-        const face = data.faces[0];
-        setLastResult(face);
-        setProcessedImage(data.processed_image || null);
+      console.log("Recognition response:", data); // Debug log
+      
+      if (data.success) {
+        if (data.faces && data.faces.length > 0) {
+          const face = data.faces[0]; // Get the first detected face
+          setDemoResult({
+            match: face.match,
+            distance: face.distance,
+            confidence: face.confidence,
+            box: face.box
+          });
+          
+          setLastRecognitionTime(new Date());
+          
+          if (face.match) {
+            setRecognitionStatus("success");
+            setStatus(`✅ Face recognized: ${face.match.name} (ID: ${face.match.user_id}) - Confidence: ${face.confidence}% - Distance: ${face.distance?.toFixed(3)}`);
+          } else {
+            setRecognitionStatus("failed");
+            setStatus(`❌ Face not recognized in stored photos - Distance: ${face.distance?.toFixed(3)} - Threshold check failed`);
+          }
+        } else {
+          setRecognitionStatus("detecting");
+          setStatus("👤 No face detected in image - Please position your face clearly in the camera");
+          setDemoResult(null);
+        }
       } else {
-        setLastResult(null);
-        setProcessedImage(null);
+        setRecognitionStatus("failed");
+        setStatus(`❌ Recognition failed: ${data.error || 'Unknown error'}`);
+        setDemoResult(null);
       }
     } catch (err) {
-      console.error(err);
+      console.error("Demo recognition error:", err);
+      setRecognitionStatus("failed");
+      setStatus(`❌ Connection error: ${err instanceof Error ? err.message : 'Network or server error'}`);
+      setDemoResult(null);
     }
-  }, [isLiveActive]);
+  }, [demoRecognitionActive]);
+
+  const startAttendance = (session: AttendanceSession) => {
+    setSelectedSession(session);
+    setCameraMode("attendance");
+    setIsLiveActive(true);
+    setDemoRecognitionActive(false);
+    setStatus(`Ready to mark attendance for ${session.subject}`);
+  };
+
+  const stopAttendance = () => {
+    setIsLiveActive(false);
+    setSelectedSession(null);
+    setCameraMode("off");
+    setStatus("");
+  };
+
+  const startDemoRecognition = () => {
+    setDemoRecognitionActive(true);
+    setIsLiveActive(false);
+    setSelectedSession(null);
+    setCameraMode("demo");
+    setDemoResult(null);
+    setRecognitionStatus("idle");
+    setRecognitionCount(0);
+    setLastRecognitionTime(null);
+    setStatus("📸 Camera ready for face recognition demo - Position your face in front of the camera");
+  };
+
+  const stopDemoRecognition = () => {
+    setDemoRecognitionActive(false);
+    setCameraMode("off");
+    setDemoResult(null);
+    setRecognitionStatus("idle");
+    setStatus("");
+  };
+
+  const toggleCamera = () => {
+    if (cameraMode === "off") {
+      if (selectedSession) {
+        startAttendance(selectedSession);
+      } else {
+        startDemoRecognition();
+      }
+    } else {
+      setCameraMode("off");
+      setIsLiveActive(false);
+      setDemoRecognitionActive(false);
+      setStatus("");
+    }
+  };
+
+  // Show attendance completed state
+  if (attendanceCompleted && attendanceStatus?.has_marked_attendance) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50">
+        <header className="bg-white/80 backdrop-blur-lg border-b border-slate-200 shadow-sm">
+          <div className="px-4 sm:px-6 py-4">
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => router.back()}
+                className="flex items-center gap-2 text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                <ArrowLeft size={20} />
+                <span className="hidden sm:inline">Back</span>
+              </button>
+              <h1 className="text-xl font-semibold text-gray-800">Attendance Status</h1>
+              <div className="w-20" />
+            </div>
+          </div>
+        </header>
+
+        <div className="container mx-auto px-4 py-8">
+          <div className="max-w-md mx-auto">
+            <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
+              <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                <CheckCircle className="w-10 h-10 text-green-600" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">Attendance Completed!</h2>
+              <p className="text-gray-600 mb-6">
+                You have successfully marked your attendance for today's sessions.
+              </p>
+              
+              {attendanceStatus?.marked_sessions.map((session) => (
+                <div key={session.session_id} className="bg-green-50 rounded-lg p-4 mb-4">
+                  <div className="font-semibold text-green-800">{session.subject}</div>
+                  <div className="text-sm text-green-600">
+                    {session.department} - {session.year} - {session.division}
+                  </div>
+                </div>
+              ))}
+              
+              <button
+                onClick={() => router.push("/student/view-attendance")}
+                className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                View Attendance History
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
@@ -48,272 +347,287 @@ export default function DemoSession() {
       <header className="bg-white/80 backdrop-blur-lg border-b border-slate-200 shadow-sm">
         <div className="px-4 sm:px-6 py-4">
           <div className="flex items-center justify-between">
-            {/* Left Section */}
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => router.push("/dashboard")}
-                className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors group"
-              >
-                <ArrowLeft className="w-6 h-6 text-slate-600 group-hover:text-slate-800 transition-colors" />
-              </button>
-              
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg">
-                  <Camera className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight">Face Recognition Demo</h1>
-                  <p className="text-slate-600 text-sm font-medium">Live demonstration and testing</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Status Indicator */}
-            <div className="flex items-center gap-3">
-              <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border-2 transition-all ${
-                isLiveActive 
-                  ? "bg-emerald-50 border-emerald-200 shadow-sm" 
-                  : "bg-slate-100 border-slate-200"
-              }`}>
-                <div className={`w-2 h-2 rounded-full ${
-                  isLiveActive ? "bg-emerald-500 animate-pulse" : "bg-slate-400"
-                }`} />
-                <span className={`text-sm font-semibold ${
-                  isLiveActive ? "text-emerald-700" : "text-slate-600"
-                }`}>
-                  {isLiveActive ? "LIVE" : "STANDBY"}
-                </span>
-              </div>
-            </div>
+            <button
+              onClick={() => router.back()}
+              className="flex items-center gap-2 text-gray-600 hover:text-gray-800 transition-colors"
+            >
+              <ArrowLeft size={20} />
+              <span className="hidden sm:inline">Back</span>
+            </button>
+            <h1 className="text-xl font-semibold text-gray-800">Mark Attendance</h1>
+            <div className="w-20" />
           </div>
         </div>
       </header>
 
-      {/* Controls - Moved Above */}
-      <div className="px-4 sm:px-6 py-4 bg-white/50 border-b border-slate-200">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-            {/* Left Controls */}
-            <div className="flex flex-wrap gap-3">
+      <div className="container mx-auto px-4 py-6">
+        <div className="grid lg:grid-cols-4 gap-6">
+          {/* Active Sessions - Left Column */}
+          <div className="lg:col-span-1 space-y-6">
+            <div className="bg-white rounded-2xl shadow-lg p-6">
+              <h2 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <Clock className="w-5 h-5 text-blue-600" />
+                Active Sessions
+              </h2>
+              
+              {loading ? (
+                <div className="text-center py-6">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
+                  <p className="text-gray-600 mt-2 text-sm">Loading...</p>
+                </div>
+              ) : activeSessions.length === 0 ? (
+                <div className="text-center py-6">
+                  <Users className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                  <p className="text-gray-600 text-sm">No active sessions</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {activeSessions.map((session) => (
+                    <div
+                      key={session.session_id}
+                      className={`border rounded-lg p-3 transition-all cursor-pointer ${
+                        selectedSession?.session_id === session.session_id
+                          ? "border-blue-500 bg-blue-50"
+                          : "border-gray-200 hover:border-gray-300"
+                      }`}
+                      onClick={() => cameraMode === "off" && setSelectedSession(session)}
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <div>
+                          <h3 className="font-medium text-gray-800 text-sm flex items-center gap-1">
+                            <BookOpen className="w-3 h-3" />
+                            {session.subject}
+                          </h3>
+                          <p className="text-xs text-gray-600">
+                            {session.department} - {session.year}
+                          </p>
+                        </div>
+                        <span className="text-xs font-medium bg-green-100 text-green-800 px-2 py-1 rounded">
+                          {getTimeRemaining(session.expires_at)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Camera Section - Center Column */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-white rounded-2xl shadow-lg p-6">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <Camera className="w-5 h-5 text-blue-600" />
+                Face Recognition Camera
+                {cameraMode !== "off" && (
+                  <span className={`text-xs px-2 py-1 rounded-full ${
+                    cameraMode === "attendance" ? "bg-blue-100 text-blue-800" : "bg-green-100 text-green-800"
+                  }`}>
+                    {cameraMode === "attendance" ? "Attendance Mode" : "Demo Mode"}
+                  </span>
+                )}
+              </h2>
+              
+              {selectedSession && cameraMode === "attendance" && (
+                <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                  <p className="text-sm text-blue-800">
+                    <strong>Selected:</strong> {selectedSession.subject} - {selectedSession.department}
+                  </p>
+                </div>
+              )}
+              
+              {cameraMode === "demo" && (
+                <div className="mb-4 p-3 bg-green-50 rounded-lg">
+                  <p className="text-sm text-green-800">
+                    <strong>Demo Mode:</strong> Testing face recognition with stored photos
+                  </p>
+                </div>
+              )}
+              
+              <div className="relative">
+                {cameraMode === "off" ? (
+                  <div className="text-center py-12 bg-gray-50 rounded-lg">
+                    <Camera className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                    <p className="text-gray-600 mb-2">Camera Ready</p>
+                    <p className="text-sm text-gray-500">
+                      {selectedSession ? "Select a session and click start" : "Click start for demo mode"}
+                    </p>
+                  </div>
+                ) : (
+                  <CameraCapture
+                    onCapture={handleRecognize}
+                    isLiveMode={cameraMode === "attendance" || cameraMode === "demo"}
+                    captureIntervalMs={cameraMode === "demo" ? 2000 : 3000}
+                    facesData={
+                      cameraMode === "attendance" && lastResult ? [{
+                        box: lastResult.box || [0, 0, 0, 0],
+                        match: lastResult.match
+                      }] : 
+                      cameraMode === "demo" && demoResult ? [{
+                        box: demoResult.box || [0, 0, 0, 0],
+                        match: demoResult.match
+                      }] : []
+                    }
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Status Sidebar - Right Column */}
+          <div className="lg:col-span-1 space-y-6">
+            <div className="bg-white rounded-2xl shadow-lg p-6">
+              <h2 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-purple-600" />
+                Camera Control
+                <div className={`w-2 h-2 rounded-full ${
+                  connectionStatus === "connected" ? "bg-green-500" :
+                  connectionStatus === "error" ? "bg-red-500" :
+                  "bg-yellow-500 animate-pulse"
+                }`} title={`Backend ${connectionStatus}`}></div>
+              </h2>
+              
+              {/* Unified Camera Button */}
               <button
-                onClick={() => setIsLiveActive(!isLiveActive)}
-                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-3 border-2 ${
-                  isLiveActive 
-                    ? "bg-red-50 hover:bg-red-100 text-red-600 border-red-200 hover:border-red-300 shadow-sm" 
-                    : "bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border-emerald-200 hover:border-emerald-300 shadow-sm"
+                onClick={toggleCamera}
+                disabled={markingAttendance || (cameraMode === "attendance" && !selectedSession)}
+                className={`w-full py-3 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  cameraMode === "off" 
+                    ? selectedSession
+                      ? "bg-blue-600 hover:bg-blue-700 text-white"
+                      : "bg-green-600 hover:bg-green-700 text-white"
+                    : "bg-red-600 hover:bg-red-700 text-white"
                 }`}
               >
-                {isLiveActive ? (
+                {cameraMode === "off" ? (
                   <>
-                    <Square className="w-5 h-5" />
-                    Stop Demo
+                    <Play size={18} />
+                    {selectedSession ? "Start Attendance" : "Start Demo"}
                   </>
                 ) : (
                   <>
-                    <Play className="w-5 h-5" />
-                    Start Demo
+                    <Square size={18} />
+                    Stop Camera
                   </>
                 )}
               </button>
 
-              <button
-                onClick={() => router.push("/dashboard")}
-                className="px-6 py-3 rounded-xl font-semibold bg-blue-50 hover:bg-blue-100 text-blue-600 border-2 border-blue-200 hover:border-blue-300 transition-all duration-300 flex items-center justify-center gap-3 shadow-sm"
-              >
-                <ArrowLeft className="w-5 h-5" />
-                Back to Dashboard
-              </button>
-            </div>
+              {/* Mode Selection */}
+              {cameraMode === "off" && (
+                <div className="mt-4 space-y-2">
+                  <button
+                    onClick={() => setSelectedSession(null)}
+                    className={`w-full py-2 px-3 text-sm rounded-lg transition-colors ${
+                      !selectedSession 
+                        ? "bg-green-100 text-green-800 border border-green-300"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                    }`}
+                  >
+                    Demo Mode
+                  </button>
+                </div>
+              )}
 
-            {/* Right Stats */}
-            <div className="flex flex-wrap gap-4 text-sm">
-              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 shadow-sm">
-                <span className="text-slate-600 font-medium">Status:</span>
-                <span className={`font-semibold ${
-                  isLiveActive ? "text-emerald-600" : "text-amber-600"
+              {/* Status Display */}
+              {status && (
+                <div className={`mt-4 p-3 rounded-lg border ${
+                  recognitionStatus === "success" 
+                    ? 'bg-green-50 border-green-200 text-green-800' 
+                    : recognitionStatus === "failed"
+                    ? 'bg-red-50 border-red-200 text-red-800'
+                    : recognitionStatus === "recognizing"
+                    ? 'bg-blue-50 border-blue-200 text-blue-800'
+                    : 'bg-gray-50 border-gray-200 text-gray-800'
                 }`}>
-                  {isLiveActive ? "Active" : "Inactive"}
-                </span>
-              </div>
-              
-              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 shadow-sm">
-                <span className="text-slate-600 font-medium">Last Result:</span>
-                <span className={`font-semibold ${
-                  lastResult?.match ? "text-emerald-600" : "text-slate-600"
-                }`}>
-                  {lastResult?.match ? "Match Found" : "No Match"}
-                </span>
-              </div>
+                  <div className="flex items-center gap-2">
+                    {recognitionStatus === "recognizing" && (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent"></div>
+                    )}
+                    <p className="text-sm font-medium">{status}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Recognition Statistics */}
+              {cameraMode === "demo" && (
+                <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                  <h3 className="font-semibold text-gray-800 mb-2 text-sm">Recognition Stats</h3>
+                  <div className="space-y-1 text-xs text-gray-600">
+                    <p>Attempts: {recognitionCount}</p>
+                    <p>Status: <span className={`font-medium ${
+                      recognitionStatus === "success" ? "text-green-600" :
+                      recognitionStatus === "failed" ? "text-red-600" :
+                      recognitionStatus === "recognizing" ? "text-blue-600" :
+                      "text-gray-600"
+                    }`}>{recognitionStatus.charAt(0).toUpperCase() + recognitionStatus.slice(1)}</span></p>
+                    {lastRecognitionTime && (
+                      <p>Last: {lastRecognitionTime.toLocaleTimeString()}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Recognition Results */}
+              {(cameraMode === "demo" && demoResult) && (
+                <div className="mt-4 p-4 bg-white rounded-lg border shadow-sm">
+                  <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                    <User className="w-4 h-4" />
+                    Recognition Result
+                  </h3>
+                  {demoResult.match ? (
+                    <div className="space-y-3">
+                      <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <CheckCircle className="w-5 h-5 text-green-600" />
+                          <span className="font-semibold text-green-800">RECOGNIZED</span>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="font-medium text-green-800 text-lg">{demoResult.match.name}</p>
+                          <p className="text-sm text-green-700">Student ID: {demoResult.match.user_id}</p>
+                          <div className="flex justify-between text-xs text-green-600 mt-2">
+                            <span>Confidence: {demoResult.confidence ? demoResult.confidence + '%' : (demoResult.distance ? ((1 - demoResult.distance) * 100).toFixed(1) + '%' : 'N/A')}</span>
+                            <span>Distance: {demoResult.distance?.toFixed(3) || 'N/A'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-red-50 rounded-lg border border-red-200">
+                      <div className="flex items-center gap-2 mb-2">
+                        <User className="w-5 h-5 text-red-600" />
+                        <span className="font-semibold text-red-800">NOT RECOGNIZED</span>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-sm text-red-700">Face detected but not found in database</p>
+                        <p className="text-xs text-red-600">
+                          Distance: {demoResult.distance?.toFixed(3) || 'N/A'}
+                        </p>
+                        <p className="text-xs text-red-500 mt-2">
+                          Make sure you have registered your photos properly
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Session Info */}
+              {selectedSession && (
+                <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                  <h3 className="font-semibold text-blue-800 mb-2">Selected Session</h3>
+                  <p className="text-sm text-blue-700 font-medium">{selectedSession.subject}</p>
+                  <p className="text-xs text-blue-600">
+                    {selectedSession.department} - {selectedSession.year} - {selectedSession.division}
+                  </p>
+                  <p className="text-xs text-blue-600 mt-1">
+                    Time left: {getTimeRemaining(selectedSession.expires_at)}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
-
-      {/* Main Content */}
-      <main className="p-4 sm:p-6">
-        <div className="max-w-7xl mx-auto">
-          {/* Camera and Results Section */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8 mb-8">
-            {/* Camera Feed */}
-            <div className="bg-white rounded-2xl border-2 border-purple-200 p-6 shadow-lg">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-3 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg">
-                  <Camera className="w-5 h-5 text-white" />
-                </div>
-                <h2 className="text-xl font-bold text-slate-800">Camera Feed</h2>
-              </div>
-              
-              <div className="relative rounded-xl overflow-hidden bg-slate-100 border-2 border-slate-200">
-                <CameraCapture
-                  isLiveMode={isLiveActive}
-                  captureIntervalMs={1000}
-                  onCapture={handleRecognize}
-                  facesData={
-                    lastResult && lastResult.box
-                      ? [{
-                          ...lastResult,
-                          box: lastResult.box
-                        }]
-                      : []
-                  }
-                />
-                
-                {/* Overlay Status */}
-                {!isLiveActive && (
-                  <div className="absolute inset-0 bg-slate-900/70 flex items-center justify-center backdrop-blur-sm">
-                    <div className="text-center">
-                      <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
-                        <Play className="w-8 h-8 text-slate-600" />
-                      </div>
-                      <p className="text-white font-semibold">Click Start Demo to begin</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Results Panel */}
-            <div className="bg-white rounded-2xl border-2 border-blue-200 p-6 shadow-lg">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-3 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg">
-                  <BarChart3 className="w-5 h-5 text-white" />
-                </div>
-                <h2 className="text-xl font-bold text-slate-800">Recognition Results</h2>
-              </div>
-
-              {/* Results Content */}
-              <div className="space-y-6">
-                {/* Status Card */}
-                <div className={`p-4 rounded-xl border-2 transition-all ${
-                  lastResult?.match 
-                    ? "bg-emerald-50 border-emerald-200 shadow-sm" 
-                    : "bg-slate-50 border-slate-200"
-                }`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-slate-600 text-sm font-medium">Status</span>
-                    <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                      lastResult?.match 
-                        ? "bg-emerald-100 text-emerald-700 border border-emerald-200" 
-                        : "bg-slate-100 text-slate-600 border border-slate-200"
-                    }`}>
-                      {lastResult?.match ? "MATCH FOUND" : "NO MATCH"}
-                    </div>
-                  </div>
-                  <p className="text-slate-800 font-bold">
-                    {lastResult?.match 
-                      ? `Identified: ${lastResult.match.name}` 
-                      : "No face recognized"}
-                  </p>
-                </div>
-
-                {/* User Info - Only shown when match is found */}
-                {lastResult?.match && (
-                  <div className="p-4 rounded-xl bg-blue-50 border-2 border-blue-200 shadow-sm">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="p-2 bg-blue-500 rounded-lg">
-                        <User className="w-5 h-5 text-white" />
-                      </div>
-                      <h3 className="text-lg font-bold text-slate-800">User Information</h3>
-                    </div>
-                    <div className="space-y-3">
-                      <div>
-                        <span className="text-slate-600 text-sm font-medium">Name:</span>
-                        <p className="text-slate-800 font-semibold">{lastResult.match.name}</p>
-                      </div>
-                      <div>
-                        <span className="text-slate-600 text-sm font-medium">User ID:</span>
-                        <p className="text-slate-800 font-mono text-sm bg-slate-100 px-2 py-1 rounded">{lastResult.match.user_id}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* No Match State */}
-                {!lastResult?.match && isLiveActive && (
-                  <div className="p-6 rounded-xl bg-slate-50 border-2 border-slate-200">
-                    <div className="text-center">
-                      <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center mx-auto mb-3">
-                        <User className="w-6 h-6 text-slate-500" />
-                      </div>
-                      <p className="text-slate-700 font-semibold">No face recognized</p>
-                      <p className="text-slate-500 text-sm mt-1">Ensure face is clearly visible in camera</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Instructions */}
-                <div className="p-4 rounded-xl bg-gradient-to-br from-slate-50 to-blue-50 border-2 border-slate-200">
-                  <h4 className="text-slate-800 font-bold mb-3">How it works:</h4>
-                  <ul className="text-slate-600 text-sm space-y-2">
-                    <li className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                      Click "Start Demo" to begin face recognition
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                      Position your face clearly in the camera view
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                      Results will appear here in real-time
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                      Click "Stop Demo" to end the session
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Processed Image Section */}
-          {processedImage && (
-            <div className="bg-white rounded-2xl border-2 border-cyan-200 p-6 shadow-lg">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-3 bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-xl shadow-lg">
-                  <Camera className="w-5 h-5 text-white" />
-                </div>
-                <h3 className="text-xl font-bold text-slate-800">Processed Image</h3>
-              </div>
-              
-              <div className="flex justify-center">
-                <div className="rounded-xl overflow-hidden bg-slate-100 border-2 border-slate-200 max-w-2xl shadow-lg">
-                  <img 
-                    src={processedImage} 
-                    alt="Processed" 
-                    className="w-full h-auto max-h-96 object-contain"
-                  />
-                </div>
-              </div>
-              
-              <p className="text-slate-600 text-sm mt-4 text-center">
-                AI-processed image with face detection and recognition overlay
-              </p>
-            </div>
-          )}
-        </div>
-      </main>
     </div>
   );
 }

@@ -6,10 +6,25 @@
       "static/css/app/layout.css",
       "static/chunks/app/layout.js"
     ],
+    "/teacher/start-session/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/teacher/start-session/page.js"
+    ],
+    "/student/demo-session/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/student/demo-session/page.js"
+    ],
     "/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/page.js"
+    ],
+    "/signup/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/signup/page.js"
     ],
     "/signin/page": [
       "static/chunks/webpack.js",
@@ -20,6 +35,16 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/dashboard/page.js"
+    ],
+    "/student/view-attendance/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/student/view-attendance/page.js"
+    ],
+    "/teacher/dashboard/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/teacher/dashboard/page.js"
     ]
   }
 }

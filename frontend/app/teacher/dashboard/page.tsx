@@ -94,7 +94,7 @@ export default function TeacherDashboard() {
       title: "Attendance Records",
       description: "View comprehensive attendance statistics and reports",
       icon: <BarChart3 className="w-7 h-7" />,
-      path: "/student/view-attendance",
+      path: "/teacher/attendance-records",
       color: "from-amber-500 to-orange-500",
       bgColor: "bg-amber-50 hover:bg-amber-100",
       borderColor: "border-amber-200 hover:border-amber-300"

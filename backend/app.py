@@ -1,17 +1,19 @@
-# app.py - OPTIMIZED VERSION
+# app.py - SUPABASE VERSION
 import os
 import time
 import logging
 import threading
 from flask import Flask
 from flask_cors import CORS
-from pymongo import MongoClient
+from supabase import create_client, Client
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 import numpy as np
 
 # Blueprint imports
 from auth.routes import auth_bp
+from test_routes import test_bp
+from simple_auth import simple_auth_bp
 
 # Optional student/teacher blueprints
 try:
@@ -45,17 +47,15 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# MongoDB setup
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
-DB_NAME = os.getenv("DATABASE_NAME", "facerecognition")
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "students")
+# Supabase setup
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 THRESHOLD = float(os.getenv("THRESHOLD", "0.6"))
 
-client = MongoClient(MONGODB_URI)
-db = client[DB_NAME]
-students_collection = db[COLLECTION_NAME]
-attendance_db = client["facerecognition_db"]
-attendance_collection = attendance_db["attendance_records"]
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # OPTIMIZED MODEL MANAGER CLASS
 class ModelManager:
@@ -172,10 +172,8 @@ app = Flask(__name__)
 CORS(app)
 
 # Configure Flask app with database and model instances
-app.config["DB"] = db
-app.config["COLLECTION_NAME"] = COLLECTION_NAME
+app.config["SUPABASE"] = supabase
 app.config["THRESHOLD"] = THRESHOLD
-app.config["ATTENDANCE_COLLECTION"] = attendance_collection
 
 # CRITICAL: Pass model manager to Flask config so blueprints can access it
 app.config["MODEL_MANAGER"] = model_manager
@@ -199,6 +197,8 @@ def health_check():
 
 # Register blueprints
 app.register_blueprint(auth_bp)
+app.register_blueprint(test_bp)
+app.register_blueprint(simple_auth_bp)
 
 if student_registration_bp:
     app.register_blueprint(student_registration_bp)

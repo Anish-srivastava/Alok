@@ -1,68 +1,113 @@
 from flask import Blueprint, request, jsonify, current_app
-from flask_bcrypt import Bcrypt
 import time
+import logging
+import hashlib
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__)
-bcrypt = Bcrypt()
+
+def simple_hash(password):
+    """Simple hash function for testing (NOT for production!)"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 @auth_bp.route('/api/signup', methods=['POST'])
 def api_signup():
-    data = request.get_json()
-    username = data.get('username')
-    email = data.get('email')
-    password = data.get('password')
-    user_type = data.get('userType', 'student')  # Default to student
-
-    if not all([username, email, password]):
-        return jsonify({"success": False, "error": "All fields required"}), 400
-
-    db = current_app.config.get("DB")
-    
-    # Choose collection based on user type
-    if user_type == 'teacher':
-        auth_col = db.auth_teachers
-        # Add additional teacher-specific fields
-        employee_id = data.get('employeeId')
-        department = data.get('department')
+    logger.info("📝 Signup endpoint called")
+    try:
+        data = request.get_json()
+        logger.info(f"📝 Received data: {data}")
         
-        if not employee_id:
-            return jsonify({"success": False, "error": "Employee ID required for teachers"}), 400
-    else:
-        auth_col = db.auth_users
-    
-    # Check if email already exists in the appropriate collection
-    if auth_col.find_one({'email': email}):
-        return jsonify({
-            "success": False, 
-            "error": f"Email already registered as {user_type}"
-        }), 400
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        user_type = data.get('userType', 'student')  # Default to student
 
-    hashed_pw = bcrypt.generate_password_hash(password).decode('utf-8')
+        if not all([username, email, password]):
+            logger.warning("📝 Missing required fields")
+            return jsonify({"success": False, "error": "All fields required"}), 400
 
-    # Prepare user document
-    user_doc = {
-        "username": username,
-        "email": email,
-        "password": hashed_pw,
-        "userType": user_type,
-        "status": "active",
-        "created_at": time.time()
-    }
-    
-    # Add type-specific fields
-    if user_type == 'teacher':
-        user_doc.update({
-            "employeeId": employee_id,
-            "department": department,
-            "role": "teacher"
-        })
-    
-    auth_col.insert_one(user_doc)
+        supabase = current_app.config.get("SUPABASE")
+        logger.info(f"📝 Supabase client: {supabase}")
+        
+        # Choose table based on user type
+        if user_type == 'teacher':
+            table_name = 'auth_teachers'
+            # Add additional teacher-specific fields
+            employee_id = data.get('employeeId')
+            department = data.get('department', 'General')  # Default department
+            
+            if not employee_id:
+                return jsonify({"success": False, "error": "Employee ID required for teachers"}), 400
+        else:
+            table_name = 'auth_users'
+            # For students, employeeId is optional (could be student ID)
+            employee_id = data.get('employeeId', '')  # Optional for students
+        
+        logger.info(f"📝 Using table: {table_name}")
+        
+        # Check if email already exists in the appropriate table
+        logger.info(f"📝 Checking for existing email: {email}")
+        existing_user = supabase.table(table_name).select("id").eq("email", email).execute()
+        logger.info(f"📝 Existing user check result: {existing_user}")
+        
+        if existing_user.data:
+            return jsonify({
+                "success": False, 
+                "error": f"Email already registered as {user_type}"
+            }), 400
 
-    return jsonify({
-        "success": True, 
-        "message": f"{user_type.capitalize()} registered successfully"
-    })
+        # Use simple hash instead of bcrypt for testing
+        hashed_pw = simple_hash(password)
+        logger.info("📝 Password hashed successfully")
+
+        # Prepare user document based on user type
+        if user_type == 'teacher':
+            # For teachers table - no user_type column
+            user_doc = {
+                "username": username,
+                "email": email,
+                "password": hashed_pw,
+                "employee_id": employee_id,
+                "department": department,
+                "status": "active",
+                "role": "teacher",
+                "created_at": int(time.time())  # Convert to integer
+            }
+        else:
+            # For students in auth_users table - has user_type column
+            user_doc = {
+                "username": username,
+                "email": email,
+                "password": hashed_pw,
+                "user_type": user_type,
+                "student_id": employee_id,  # Store as student_id for students
+                "department": "General",  # Default department for students
+                "status": "active",
+                "role": "student",
+                "created_at": int(time.time())  # Convert to integer
+            }
+        
+        logger.info(f"📝 Inserting user: {user_doc}")
+        result = supabase.table(table_name).insert(user_doc).execute()
+        logger.info(f"📝 Insert result: {result}")
+        
+        if result.data:
+            return jsonify({
+                "success": True, 
+                "message": f"{user_type.capitalize()} registered successfully"
+            })
+        else:
+            return jsonify({
+                "success": False, 
+                "error": "Registration failed"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"📝 Signup error: {str(e)}")
+        return jsonify({"success": False, "error": f"Server error: {str(e)}"}), 500
 
 @auth_bp.route('/api/signin', methods=['POST'])
 def api_signin():
@@ -74,27 +119,29 @@ def api_signin():
     if not all([email, password]):
         return jsonify({"success": False, "error": "Email and password required"}), 400
 
-    db = current_app.config.get("DB")
+    supabase = current_app.config.get("SUPABASE")
     
-    # Choose collection based on user type
+    # Choose table based on user type
     if user_type == 'teacher':
-        auth_col = db.auth_teachers
+        table_name = 'auth_teachers'
         user_role = "teacher"
     else:
-        auth_col = db.auth_users
+        table_name = 'auth_users'
         user_role = "student"
     
-    # Find user in appropriate collection
-    user = auth_col.find_one({'email': email})
+    # Find user in appropriate table
+    user_result = supabase.table(table_name).select("*").eq("email", email).execute()
     
-    if not user:
+    if not user_result.data:
         return jsonify({
             "success": False, 
             "error": f"No {user_type} account found with this email"
         }), 401
     
-    # Check password
-    if not bcrypt.check_password_hash(user['password'], password):
+    user = user_result.data[0]
+    
+    # Check password with simple hash
+    if user['password'] != simple_hash(password):
         return jsonify({
             "success": False, 
             "error": "Invalid password"
@@ -109,7 +156,7 @@ def api_signin():
 
     # Prepare response based on user type
     user_info = {
-        "_id": str(user['_id']),
+        "id": user['id'],
         "username": user['username'],
         "email": user['email'],
         "userType": user_type,
@@ -119,23 +166,25 @@ def api_signin():
     # Add type-specific information
     if user_type == 'teacher':
         user_info.update({
-            "employeeId": user.get('employeeId'),
+            "employeeId": user.get('employee_id'),
             "department": user.get('department'),
             "name": user['username']  # Use username as display name for teachers
         })
         
         # Check if teacher has student record too (optional)
-        student_record = db.students.find_one({'email': email})
-        if student_record:
+        student_result = supabase.table('students').select("*").eq("email", email).execute()
+        if student_result.data:
+            student_record = student_result.data[0]
             user_info['hasStudentRecord'] = True
-            user_info['studentId'] = student_record.get('studentId')
+            user_info['studentId'] = student_record.get('student_id')
     else:
         # For students, try to get student record
-        student_record = db.students.find_one({'email': email})
-        if student_record:
+        student_result = supabase.table('students').select("*").eq("email", email).execute()
+        if student_result.data:
+            student_record = student_result.data[0]
             user_info.update({
-                "studentId": student_record.get('studentId'),
-                "studentName": student_record.get('studentName'),
+                "studentId": student_record.get('student_id'),
+                "studentName": student_record.get('student_name'),
                 "department": student_record.get('department'),
                 "hasStudentRecord": True
             })
@@ -162,20 +211,22 @@ def get_user_profile():
     if not user_email:
         return jsonify({"success": False, "error": "Authentication required"}), 401
     
-    db = current_app.config.get("DB")
+    supabase = current_app.config.get("SUPABASE")
     
-    # Get user from appropriate collection
+    # Get user from appropriate table
     if user_type == 'teacher':
-        auth_col = db.auth_teachers
+        table_name = 'auth_teachers'
     else:
-        auth_col = db.auth_users
+        table_name = 'auth_users'
     
-    user = auth_col.find_one({'email': user_email}, {'password': 0})  # Exclude password
+    user_result = supabase.table(table_name).select("*").eq("email", user_email).execute()
     
-    if not user:
+    if not user_result.data:
         return jsonify({"success": False, "error": "User not found"}), 404
     
-    user['_id'] = str(user['_id'])
+    user = user_result.data[0]
+    # Remove password from response
+    user.pop('password', None)
     
     return jsonify({
         "success": True,
@@ -193,25 +244,27 @@ def switch_user_role():
     if not all([user_email, target_type]):
         return jsonify({"success": False, "error": "Email and target type required"}), 400
     
-    db = current_app.config.get("DB")
+    supabase = current_app.config.get("SUPABASE")
     
-    # Check if user exists in target collection
+    # Check if user exists in target table
     if target_type == 'teacher':
-        target_col = db.auth_teachers
+        table_name = 'auth_teachers'
     else:
-        target_col = db.auth_users
+        table_name = 'auth_users'
     
-    target_user = target_col.find_one({'email': user_email})
+    target_user_result = supabase.table(table_name).select("*").eq("email", user_email).execute()
     
-    if not target_user:
+    if not target_user_result.data:
         return jsonify({
             "success": False, 
             "error": f"No {target_type} account found for this email"
         }), 404
     
+    target_user = target_user_result.data[0]
+    
     # Return user info for the target role
     user_info = {
-        "_id": str(target_user['_id']),
+        "id": target_user['id'],
         "username": target_user['username'],
         "email": target_user['email'],
         "userType": target_type
@@ -219,7 +272,7 @@ def switch_user_role():
     
     if target_type == 'teacher':
         user_info.update({
-            "employeeId": target_user.get('employeeId'),
+            "employeeId": target_user.get('employee_id'),
             "department": target_user.get('department')
         })
     
