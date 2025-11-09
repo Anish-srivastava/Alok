@@ -1,0 +1,28 @@
+services:
+  # Backend Service
+  - type: web
+    name: attendance-backend
+    env: python
+    region: oregon
+    buildCommand: "cd backend && chmod +x build.sh && ./build.sh"
+    startCommand: "cd backend && gunicorn app:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: THRESHOLD
+        value: 0.6
+    
+  # Frontend Service
+  - type: web
+    name: attendance-frontend
+    env: node
+    region: oregon
+    buildCommand: "cd frontend && npm install && npm run build"
+    startCommand: "cd frontend && npm start"
+    envVars:
+      - key: NODE_VERSION
+        value: 18.17.0

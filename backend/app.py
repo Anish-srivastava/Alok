@@ -230,8 +230,9 @@ if __name__ == "__main__":
 
     # Final model verification before starting
     if model_manager.is_ready():
-        logger.info("🎯 All systems ready! Server starting on http://0.0.0.0:5000")
-        app.run(host="0.0.0.0", port=5000, debug=False)  # Set debug=False for production
+        port = int(os.getenv("PORT", 5000))
+        logger.info(f"🎯 All systems ready! Server starting on http://0.0.0.0:{port}")
+        app.run(host="0.0.0.0", port=port, debug=False)  # Set debug=False for production
     else:
         logger.error("❌ Cannot start server - models not ready")
         exit(1)
