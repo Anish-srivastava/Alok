@@ -1,122 +1,71 @@
-import HeroSection from '@/app/components/HeroSection';
-import FeaturesSection from "@/app/components/FeatureSection";
-import TestimonialsSection from "@/app/components/TestimonialsSection";
-import PricingSection from "@/app/components/PricingSection";
-import HowItWorksSection from "@/app/components/WorkSection";
-import AboutSection from "@/app/components/AboutSection";
-import ContactSection from "@/app/components/ContactSection";
-import Footer from "@/app/components/Footer";
 import Link from "next/link";
+import Image from "next/image";
 
 export default function HomePage() {
   return (
-    <main className="bg-gradient-to-br from-slate-50 via-white to-blue-50 min-h-screen overflow-hidden">
-      {/* Modern Navigation Bar */}
-      <nav className="bg-white/90 backdrop-blur-xl border-b border-slate-200/60 shadow-lg sticky top-0 z-50 transition-all duration-300">
-        <div className="flex justify-between items-center max-w-7xl mx-auto px-4 sm:px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
-              <span className="text-white font-bold text-lg">F</span>
-            </div>
-            <div className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-              FaceRecSys
-            </div>
-          </div>
-          
-          <div className="hidden lg:flex space-x-8">
-            <a href="#features" className="text-slate-700 hover:text-blue-600 transition-all duration-300 font-medium hover:scale-105 relative group">
-              Features
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-600 transition-all duration-300 group-hover:w-full"></span>
-            </a>
-            <a href="#testimonials" className="text-slate-700 hover:text-blue-600 transition-all duration-300 font-medium hover:scale-105 relative group">
-              Testimonials
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-600 transition-all duration-300 group-hover:w-full"></span>
-            </a>
-            <a href="#pricing" className="text-slate-700 hover:text-blue-600 transition-all duration-300 font-medium hover:scale-105 relative group">
-              Pricing
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-600 transition-all duration-300 group-hover:w-full"></span>
-            </a>
-            <a href="#how-it-works" className="text-slate-700 hover:text-blue-600 transition-all duration-300 font-medium hover:scale-105 relative group">
-              How It Works
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-600 transition-all duration-300 group-hover:w-full"></span>
-            </a>
-            <a href="#about" className="text-slate-700 hover:text-blue-600 transition-all duration-300 font-medium hover:scale-105 relative group">
-              About
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-600 transition-all duration-300 group-hover:w-full"></span>
-            </a>
-            <a href="#contact" className="text-slate-700 hover:text-blue-600 transition-all duration-300 font-medium hover:scale-105 relative group">
-              Contact
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-600 transition-all duration-300 group-hover:w-full"></span>
-            </a>
-          </div>
-          
-          <div className="flex space-x-3">
-            <Link
-              href="/signin"
-              className="px-6 py-2.5 text-blue-600 font-semibold rounded-xl hover:bg-blue-50 transition-all duration-300 border-2 border-blue-200 hover:border-blue-300 hover:scale-105 hover:shadow-lg"
-            >
-              Sign In
-            </Link>
-            <Link
-              href="/signup"
-              className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 hover:-translate-y-0.5"
-            >
-              Get Started
-            </Link>
+    <main className="bg-gradient-to-br from-slate-50 via-white to-blue-50 min-h-screen flex flex-col items-center justify-center relative overflow-hidden">
+      {/* Animated Background Elements */}
+      <div className="absolute inset-0 overflow-hidden">
+        <div className="absolute top-20 left-20 w-32 h-32 bg-blue-200 rounded-full mix-blend-multiply filter blur-xl opacity-70 animate-pulse"></div>
+        <div className="absolute top-40 right-20 w-40 h-40 bg-purple-200 rounded-full mix-blend-multiply filter blur-xl opacity-70 animate-pulse animation-delay-2000"></div>
+        <div className="absolute bottom-20 left-40 w-36 h-36 bg-pink-200 rounded-full mix-blend-multiply filter blur-xl opacity-70 animate-pulse animation-delay-4000"></div>
+      </div>
+
+      {/* Logo and Main Content */}
+      <div className="text-center space-y-8 relative z-10 animate-fade-in-up">
+        {/* Logo */}
+        <div className="flex justify-center mb-8 group">
+          <div className="relative">
+            <Image
+              src="/download.png"
+              alt="Attendance System Logo"
+              width={200}
+              height={200}
+              className="rounded-2xl shadow-2xl group-hover:shadow-3xl transition-all duration-500 transform group-hover:scale-105"
+            />
+            <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-blue-400/20 to-purple-400/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
           </div>
         </div>
-      </nav>
-
-      {/* Page Content with Smooth Animations */}
-      <div className="space-y-24 overflow-hidden">
-        {/* Hero Section */}
-        <HeroSection />
         
-        {/* Features Section */}
-        <section id="features" className="relative">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <FeaturesSection />
-          </div>
-        </section>
+        {/* Title */}
+        <h1 className="text-4xl md:text-6xl font-bold bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-600 bg-clip-text text-transparent mb-6 animate-gradient-x">
+          Face Recognition System – Attendance System
+        </h1>
         
-        {/* Testimonials Section */}
-        <section id="testimonials" className="relative bg-gradient-to-r from-slate-50 to-blue-50 py-20">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <TestimonialsSection />
-          </div>
-        </section>
+        <p className="text-xl text-slate-600 mb-12 max-w-2xl mx-auto font-medium opacity-80">
+          Advanced facial recognition technology for seamless attendance tracking
+        </p>
         
-        {/* Pricing Section */}
-        <section id="pricing" className="relative">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <PricingSection />
-          </div>
-        </section>
-        
-        {/* How It Works Section */}
-        <section id="how-it-works" className="relative bg-gradient-to-r from-blue-50 to-indigo-50 py-20 rounded-3xl mx-4">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <HowItWorksSection />
-          </div>
-        </section>
-        
-        {/* About Section */}
-        <section id="about" className="relative">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <AboutSection />
-          </div>
-        </section>
-        
-        {/* Contact Section */}
-        <section id="contact" className="relative bg-gradient-to-r from-slate-50 to-blue-50 py-20">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <ContactSection />
-          </div>
-        </section>
+        {/* Buttons */}
+        <div className="flex flex-col sm:flex-row gap-6 justify-center items-center">
+          <Link
+            href="/signin"
+            className="px-10 py-4 text-blue-600 font-semibold rounded-2xl hover:bg-blue-50 transition-all duration-300 border-2 border-blue-200 hover:border-blue-400 hover:scale-105 hover:shadow-xl backdrop-blur-sm bg-white/80 min-w-[180px] group"
+          >
+            <span className="flex items-center justify-center gap-2">
+              <svg className="w-5 h-5 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+              </svg>
+              Sign In
+            </span>
+          </Link>
+          <Link
+            href="/signup"
+            className="px-10 py-4 bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-600 text-white font-semibold rounded-2xl hover:from-blue-700 hover:via-purple-700 hover:to-indigo-700 transition-all duration-300 shadow-2xl hover:shadow-3xl hover:scale-105 hover:-translate-y-1 min-w-[180px] group relative overflow-hidden"
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-blue-400 via-purple-400 to-indigo-400 opacity-0 group-hover:opacity-20 transition-opacity duration-300"></div>
+            <span className="flex items-center justify-center gap-2 relative z-10">
+              <svg className="w-5 h-5 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Get Started
+            </span>
+          </Link>
+        </div>
       </div>
       
-      {/* Modern Footer */}
-      <Footer />
+      {/* Bottom decorative element */}
+      <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-400 via-purple-500 to-indigo-400"></div>
     </main>
   );
 }
